@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 
 def indexByBikeidTime(df):
-    #original name triptobike
     #create a bikedf dataframe that is indexed by bikeid and starttime.
     bikedf=df[['starttime','stoptime','start station id','end station id','bikeid']].sort('starttime')
     bikedf=bikedf.set_index(['bikeid','starttime'], drop=False)
@@ -12,8 +11,7 @@ def indexByBikeidTime(df):
     bikedf.index.names=['bikeid','time']
     return bikedf
 
-def tripToStation(bikedf,startdate,numberofmonths,startrow):
-    #original name biketowhere
+def tripToStation(bikedf,startdate,enddate,startrow):
     #converts the bike trip dataframe into the whereisbike datafame
     #which gives a table where rows are date-time hours, columns are bike id number, 
     #and entries are the station number
@@ -21,7 +19,7 @@ def tripToStation(bikedf,startdate,numberofmonths,startrow):
     
     #hourmarker is a df with hourly time as index,these will be the time markers 
     #where we look to see where the bikes are.
-    timerange=pd.date_range(startdate,periods=24*31*numberofmonths,freq='H')
+    timerange=pd.date_range(startdate,enddate,freq='H')
     hourmarker=pd.DataFrame(index=timerange)
 
     whereisbike=pd.DataFrame(index=timerange)
@@ -57,10 +55,10 @@ def unknownBikes(whereisbike,datetime):
     return whereisbike.loc[datetime].shape[0]-whereisbike.loc[datetime].count()
     #count doesn't include nans while shape does
     
-def stationFill(whereisbike,stationinfo,startdate=dt.datetime(2014,5,1,0),numberofmonths=1):
+def stationFill(whereisbike,stationinfo,startdate,enddate):
     #returns number of bikes at a station (each station is a column) by hour 
     #of the month (each hour is a row)
-    timerange=pd.date_range(startdate,periods=24*31*numberofmonths,freq='H')
+    timerange=pd.date_range(startdate,enddate,freq='H')
     hourmarker=pd.DataFrame(index=timerange)
     stationfills=pd.DataFrame(index=stationinfo.index.map(lambda x: float(x)))
     stationfills.index.name='station id'
@@ -91,15 +89,15 @@ def weekDayAvg(df):
     wdavg['hour']=wdavg.index.hour
     return wdavg.groupby('hour').mean()
 
-def bikeStationStays(whereisbike,stationinfo):
+def bikeStationStays(whereisbike,stationinfo, numberofmonths):
     #returns stationstays and bikestays dataframes
     #stationhours - number of hours a bike is at a station at a time
     #each row is a 'stay', gives the station id and number of hours a bike was at that station
     #station 0 is 'out on a ride', station -10 means the bike hasn't entered the system yet.
-    #bikehours - number of trips of a certain length (rows are hour lenghts) for each bike (columns).
+    #bikehours - number of trips of a certain length (rows are hour lengths) for each bike (columns).
 
     stationstays=pd.DataFrame()
-    bikestays=pd.DataFrame(index=np.arange(1,24*31))
+    bikestays=pd.DataFrame(index=np.arange(1,24*31*numberofmonths))
 
     for bikeid in whereisbike.T.index:
         df1=pd.DataFrame()
@@ -108,22 +106,31 @@ def bikeStationStays(whereisbike,stationinfo):
         #block gives the block number associated with that bike stay
         df['block']=(df!=df.shift(1)).astype(int).cumsum()
         #hours tells the number of hours the bike was at that station at that stay
-        df1['hours']=df.groupby(['block',bikeid]).size()
-        df1=df1.reset_index().drop(['block'],axis=1)
+        df1['hours']=df.groupby(['block',bikeid,]).size()
+        #getting rid of multi-index
+        df1.reset_index(inplace=True)
     
+        #picking out the datetime from first row of block
+        #blocktime sets a map from block number to datetime
+        blocktime=df[['block']].drop_duplicates()
+        blocktime['datetime']=blocktime.index
+        blocktime.set_index('block',inplace=True)
+        df1['datetime']=df1['block'].map(blocktime['datetime'])
+        df1.drop('block',axis=1,inplace=True)
+
         df1.rename(columns={bikeid:'station'},inplace=True)
         stationstays=stationstays.append(df1,ignore_index=True)
-    
+
         df1.rename(columns={'hours':bikeid},inplace=True)
         bikestays[bikeid]=df1[df1['station']>0][bikeid].value_counts()
-        
+
     #renaming station id to station new id which ranges from 0 to number of stations
     #-10 means the bike was out on a ride or not yet checked into the system
     stationstays['station new id']=stationstays['station'].map(stationinfo['new id']).fillna(-10)
-        
+
     return stationstays, bikestays
 
-def rebalanced(bikedf, startdate=dt.datetime(2014,5,1,0)):
+def rebalanced(bikedf, startdate, enddate):
     #when are the bikes being rebalanced?
     #determined by when a bike is picked up at a different station
     #from where it was last returned to
@@ -133,7 +140,7 @@ def rebalanced(bikedf, startdate=dt.datetime(2014,5,1,0)):
     #removebike gives the number of bikes removed from station, using
     #the time it was dropped off as a proxy.
 
-    timerange=pd.date_range(startdate,periods=24*31,freq='H')
+    timerange=pd.date_range(startdate,enddate,freq='H')
     hourmarker=pd.DataFrame(index=timerange)
     addbike=pd.DataFrame(index=timerange)
     removebike=pd.DataFrame(index=timerange)
